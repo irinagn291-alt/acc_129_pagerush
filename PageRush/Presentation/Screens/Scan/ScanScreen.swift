@@ -64,7 +64,7 @@ struct ScanScreen: View {
             .navigationDestination(for: VolumePreview.self) { preview in
                 VolumeDetailScreen(preview: preview)
             }
-            .onAppear { permission = AVCaptureDevice.authorizationStatus(for: .video) }
+            .onAppear { refreshCameraPermission(requestIfNeeded: true) }
         }
     }
 
@@ -74,19 +74,20 @@ struct ScanScreen: View {
         case .authorized:
             EmptyView()
         case .notDetermined:
-            Button("Enable Camera") {
-                AVCaptureDevice.requestAccess(for: .video) { _ in
-                    DispatchQueue.main.async {
-                        permission = AVCaptureDevice.authorizationStatus(for: .video)
-                    }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(PageRushPalette.secondary)
-        case .denied, .restricted:
-            Text("Camera access is off. Type the ISBN manually — still a fast win.")
+            Text("Allow camera access when prompted to scan barcodes.")
                 .font(.footnote)
                 .foregroundStyle(PageRushPalette.ink.opacity(0.7))
+        case .denied, .restricted:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Camera access is off. Type the ISBN manually — still a fast win.")
+                    .font(.footnote)
+                    .foregroundStyle(PageRushPalette.ink.opacity(0.7))
+                Button("Open Settings") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+                .font(.footnote.weight(.semibold))
+            }
         @unknown default:
             EmptyView()
         }
@@ -117,15 +118,27 @@ struct ScanScreen: View {
     }
 
     @MainActor
+    private func refreshCameraPermission(requestIfNeeded: Bool) {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        permission = status
+        guard requestIfNeeded, status == .notDetermined else { return }
+        AVCaptureDevice.requestAccess(for: .video) { _ in
+            DispatchQueue.main.async {
+                permission = AVCaptureDevice.authorizationStatus(for: .video)
+            }
+        }
+    }
+
+    @MainActor
     private func handleISBN(_ raw: String) async {
-        let digits = raw.filter(\.isNumber)
-        guard digits.count >= 10 else {
+        let normalized = normalizeISBN(raw)
+        guard normalized.count >= 10 else {
             statusText = "Need a valid ISBN (10–13 digits)."
             return
         }
         statusText = "Looking up…"
         do {
-            let items = try await QueryUseCase.lookupISBN(digits)
+            let items = try await QueryUseCase.lookupISBN(normalized)
             guard let first = items.first else {
                 statusText = "No edition found for that ISBN."
                 return
@@ -135,5 +148,14 @@ struct ScanScreen: View {
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    private func normalizeISBN(_ raw: String) -> String {
+        let upper = raw.uppercased()
+        let filtered = upper.filter { $0.isNumber || $0 == "X" }
+        if filtered.count == 10, filtered.last == "X" {
+            return String(filtered.prefix(9)) + "X"
+        }
+        return filtered.filter(\.isNumber)
     }
 }

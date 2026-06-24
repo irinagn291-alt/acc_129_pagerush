@@ -69,12 +69,15 @@ actor ArchiveWire {
     }
 
     func lookupISBN(_ raw: String) async throws -> [VolumePreview] {
-        let digits = raw.filter(\.isNumber)
-        guard digits.count >= 10 else { return [] }
-        let url = URL(string: "https://openlibrary.org/isbn/\(digits).json")!
+        let normalized = raw.uppercased().filter { $0.isNumber || $0 == "X" }
+        let query = normalized.count == 10 && normalized.hasSuffix("X")
+            ? normalized
+            : normalized.filter(\.isNumber)
+        guard query.count >= 10 else { return [] }
+        let url = URL(string: "https://openlibrary.org/isbn/\(query).json")!
         let data = try await payload(for: url)
         let edition = try JSONDecoder().decode(EditionISBNPayload.self, from: data)
-        var preview = edition.toPreview(fallbackISBN: digits)
+        var preview = edition.toPreview(fallbackISBN: query)
         if preview.creators.isEmpty {
             let names = await resolveCreatorNames(refs: edition.authors ?? [])
             if !names.isEmpty {
